@@ -1,0 +1,221 @@
+---
+title: "Project"
+output: html_document
+date: "2024-03-21"
+---
+
+Thư viện
+```{r}
+library(pROC)
+library(dplyr)
+library(corrplot)
+```
+Đọc dữ liệu
+```{r}
+data <- read.csv("winequality-white.csv", header = TRUE, sep = ";")
+str(data)
+```
+Xóa dữ liệu trùng lặp
+```{r}
+#
+data <- data[!duplicated(data), ]
+#
+```
+
+Kiểm tra dữ liệu khuyết
+```{r}
+f<-function(data){any(is.na(data))}
+apply(data, 2, f)
+```
+Đổi tên
+```{r}
+#Rename.
+data <- rename(data, f.acidity = fixed.acidity, c.acid = citric.acid, r.sugar = residual.sugar, f.s.dioxide = free.sulfur.dioxide, t.s.dioxide = total.sulfur.dioxide, v.acidity = volatile.acidity)
+```
+
+Boxplot
+```{r}
+#
+# Vẽ boxplot cho từng cột (biến) trong wine_data
+par(mfrow=c(3, 4))  # Chia cửa sổ vẽ thành 3 hàng, 4 cột (vì có 12 biến)
+for (i in 1:ncol(data)) {
+  boxplot(data[,i], main=names(data)[i])
+}
+#
+```
+
+```{r}
+outliers <- function(x, t){
+   # 1st and 3rd quantiles
+   q75 = quantile(x, 0.75)
+   q25 = quantile(x, 0.25)
+   IQR = q75-q25
+   # lower bound
+   lower_bound = q25 - t * IQR
+   # upper bound
+   upper_bound = q75 + t * IQR
+   # outliers
+   outlier_ind <- which(x < lower_bound | x > upper_bound)
+   if (length(outlier_ind) == 0){
+     return (0)
+   }
+   return(outlier_ind)
+}
+```
+
+Cực ngoại lai
+```{r}
+# Sử dụng hàm lapply để áp dụng hàm outliers cho từng cột
+s_outlier_indices <- lapply(data[, -12], outliers, t = 3)
+
+# In ra danh sách các chỉ số của giá trị cực ngoại lai cho từng biến
+for (i in 1:length(s_outlier_indices)) {
+  cat("Biến", names(data)[i], "có", length(s_outlier_indices[[i]]), "giá trị cực ngoại lai:\n")
+  print(s_outlier_indices[[i]])
+}
+```
+
+Ngoại lai
+```{r}
+# Sử dụng hàm lapply để áp dụng hàm outliers cho từng cột
+outlier_indices <- lapply(data[, -12], outliers, t = 1.5)
+
+# In ra danh sách các chỉ số của giá trị ngoại lai cho từng biến
+for (i in 1:length(outlier_indices)) {
+  cat("Biến", names(data)[i], "có", length(outlier_indices[[i]]), "giá trị cực ngoại lai:\n")
+  print(outlier_indices[[i]])
+}
+```
+Quan sát biến quality
+```{r}
+table(data$quality)
+#
+```
+Histogram
+```{r}
+par(mfrow=c(3, 4))  # Chia cửa sổ đồ thị thành 3 hàng và 4 cột
+
+for (i in 1:ncol(data)) {
+  hist(data[, i], main = names(data)[i], xlab = "", ylab = "")
+}
+```
+
+```{r}
+summary(data)
+#
+```
+
+Quality > 5 -> 1, Quanlity <= 5 ->0
+```{r}
+data$classify[data$quality > 5] <- 1
+data$classify[data$quality <= 5] <- 0
+table(data$classify)
+data <- data[-12]
+#
+```
+Tương quan
+```{r}
+corrplot(cor(data), type = 'lower', order = 'hclust', tl.col = 'black',
+         cl.ratio = 0.2, tl.srt = 45, col = COL2('PuOr', 10))
+#
+```
+VIF
+```{r}
+car::vif(glm(classify ~ ., family = binomial, data = data))
+#
+```
+Xóa density vì VIF cao
+```{r}
+data <- data[-8]
+#
+```
+
+```{r}
+car::vif(glm(classify ~ ., family = binomial, data = data))
+#
+```
+
+```{r}
+model <- glm(classify ~ ., family = binomial(link = "logit"), data = data)
+summary(model)
+#
+```
+
+```{r}
+anova(model, test = "Chisq")
+#
+```
+Kết quả kiểm định tỷ lệ hợp lý cho thấy biến c.acid và f.s.dioxide không có ảnh hưởng đến mô hình vì p\_value của cả hai đều lớn hơn mức ý nghĩa $\alpha = 0.05$. Các biến còn lại đều có ảnh hưởng trong mô hình.
+
+```{r}
+search = step(model)
+#
+```
+Kết quả ước lượng hệ số của mô hình:
+```{r}
+coef(search)
+#
+```
+Khoảng tin cậy 95\% cho các hệ số của mô hình:
+```{r}
+confint(search, level = 0.95)
+#
+```
+```{r}
+summary(search)
+#
+```
+Kết quả sau khi kiểm định tỷ lệ hợp lý:
+```{r}
+anova(search, test = "Chisq")
+#
+```
+Vậy mô hình thu được:
+$$
+\log\left(\dfrac{\mu_i}{1-\mu_i}\right) = \beta_0 + \beta_1 \text{v.acidity} + \beta_2 \text{v.acidity} + \beta_3 \text{r.sugar} + \beta_4 \text{t.s.dioxide} + \beta_5 \text{pH} \\ + \beta_6 \text{sulphates} + \beta_7 \text{alcohol}
+$$
+
+Kết quả đường cong ROC:
+```{r}
+#install.packages("pROC")
+#
+prob_pred_dt <- predict(search, type = "response")
+out_roc <- roc(response = data$classify, predictor = prob_pred_dt)
+plot(out_roc, legacy.axes = TRUE, asp = 0)
+```
+
+```{r}
+out_roc$auc
+ci.auc(out_roc, conf.level = 0.95)
+#
+```
+Giá trị ước lượng AUC là 0.8031 và khoảng tin cậy 95\% cho AUC là (0.789; 0.8172), do đó, ta có thể kết luận rằng mô hình ta xây dựng có độ chính xác chấp nhận được khi dùng để phân loại rượu.
+
+**Youden Index**
+```{r}
+out_youd <- coords(out_roc, "best", ret = c("threshold", "specificity", "sensitivity"),
+best.method = "youden")
+print(out_youd)
+#
+```
+```{r}
+print(log(out_youd$threshold/(1 - out_youd$threshold)))
+```
+
+Kết quả ngưỡng phân loại xác suất tối ưu \(c^{*}\) = 0.6699935 và kết quả của độ nhạy và độ đặc hiệu lần lượt là xấp xỉ 0.769 (tức là phân loại chính xác vào nhóm 1 và nhóm 0, đạt 67%). Do đó, ta có được ngưỡng phân loại tối ưu của \(t^{*} = \log\left ( \displaystyle \frac{0.6699935}{1-0.6699935} \right ) = 0.7081557\)\\
+
+Tức là với một đối tượng có bộ giá trị x, sao cho \(\hat{\eta}(x)  > 0.7081557\)  thì đối tượng đó sẽ được phân vào nhóm 1, với $\hat{\eta}(x) = \beta_0 + \beta_1 \text{v.acidity} + \beta_2 \text{v.acidity} + \beta_3 \text{r.sugar} + \beta_4 \text{t.s.dioxide} + \beta_5 \text{pH} \\ + \beta_6 \text{sulphates} + \beta_7 \text{alcohol}$.\\
+
+**Điểm gần góc trái**
+```{r}
+out_clost <- coords(out_roc, "best", ret = c("threshold", "specificity", "sensitivity"),
+best.method = "closest.topleft")
+print(out_clost)
+#
+```
+```{r}
+log(out_clost$threshold/(1 - out_clost$threshold))
+```
+Kết quả ngưỡng phân loại xác suất tối ưu \(c^{*}\) = 0.6439254 và kết quả của độ nhạy và độ đặc hiệu đều xấp xỉ 0.752 (tức là phân loại chính xác vào nhóm 1 và nhóm 0 đạt 64,39%). Do đó, ta có được ngưỡng phân loại tối ưu của \(t^{*} = \log\left ( \displaystyle \frac{0.6439254}{1-0.6439254} \right ) = 0.90\)\\
+
+ Tức là với một đối tượng có bộ giá trị x, sao cho \(\hat{\eta}(x)  > 0.5924426\)  thì đối tượng đó sẽ được phân vào nhóm 1, với $\hat{\eta}(x) = \beta_0 + \beta_1 \text{v.acidity} + \beta_2 \text{v.acidity} + \beta_3 \text{r.sugar} + \beta_4 \text{t.s.dioxide} + \beta_5 \text{pH} \\ + \beta_6 \text{sulphates} + \beta_7 \text{alcohol}$.\\
